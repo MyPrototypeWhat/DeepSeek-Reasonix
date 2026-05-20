@@ -3,6 +3,87 @@
 All notable changes to Reasonix. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.0] — 2026-05-20
+
+**Proxy-aware networking.** `NO_PROXY` is now honored end-to-end and
+the DeepSeek host is baked into the default bypass whitelist so a
+machine-wide `HTTPS_PROXY` no longer routes API traffic through an
+unwanted proxy (#1373). A `--no-proxy` CLI flag, `REASONIX_NO_PROXY`
+env, and `cfg.proxy` field give per-invocation control (#1374), and
+`/doctor` surfaces the resolved `NO_PROXY` value plus the routing
+decision Reasonix made for each host (#1375). If proxy behavior ever
+looks wrong, `/doctor` will tell you why in one screen.
+
+**Code intelligence boost.** Two new tree-sitter–powered tools land:
+`get_symbols` and `find_in_code` cover TS/JS/Python/Go/Rust/Java
+(#1387), giving Reasonix structural code navigation instead of plain
+grep. Java gets a dedicated `java_source` tool that reads `.java`
+sources and decompiles `.class` / inner jar entries via `javap`
+(#1344), with output stripped of noise and the read buffer raised so
+large classes fit in one round (#1390). Web search adds Perplexity
+and Exa backends alongside the existing Mojeek / Tavily set (#1350).
+
+**Lifecycle round two.** Checkpoints now gate mutating tools during
+restore so an in-flight edit can't race a rollback (#1389), state is
+preserved across plan revisions (#1388), and step evidence is
+summarized at the plan card so progress is legible without expanding
+each step (#1391). `/plan` is excluded from the strict-rails cache
+constraint that would otherwise force a re-prefix on every revision
+(#1407, #1386), and a strict end-to-end harness covers the whole
+lifecycle path (#1424).
+
+**Subagent UX.** Long-running `explore` / `research` / `review` are
+now top-level slash commands with live byte-progress in the status
+row instead of a frozen spinner (#1422). The agent loop is hardened:
+`_turnAbort` resets in `finally` so a consumer break can't lock the
+session (#1421), ambiguous search-replace edit blocks are rejected
+instead of silently miss-applying (#1414), repeated gate rejections
+no longer ping-pong (#1392), and FS tools walk `.reasonix/` so user
+skills are reachable from any subdir (#1371).
+
+**Desktop.** QQ sessions are now usable from the desktop app — the
+QQ Adapter routes events through the same RPC bridge as CLI tabs
+(#1334). Custom font support + file-link rendering improvements ship
+(#1376). Reliability fixes: `rpc_spawn` is idempotent and a
+`desktop_resync` rehydrate path recovers cleanly after a renderer
+reload (#1428); F5 / Ctrl+R are swallowed in packaged builds so a
+stray refresh can't wipe the chat (#1430); React error #31 with
+non-string MCP config items is fixed (#1394); the context-token
+meter syncs after `/compact` (#1399); the cost meter and session
+cost card apply USD→CNY conversion (#1369); `augmentProcessPath()`
+lost in the #1334 rebase is restored (#1361); desktop stdout partial
+writes are handled (#1405); `/btw` on empty payload now surfaces a
+usage hint instead of dropping the keystroke (#1383).
+
+**TUI / UI.** `/about` is a new slash command showing version,
+website, GitHub, and license (#1434). Remaining hardcoded strings in
+edit history and MCP browse are now i18n'd (#1433). Reasoning,
+streaming, and diff content beyond the recent window are elided so
+long sessions don't tank scroll perf (#1432). Wheel scroll is less
+sensitive and per-card stdout resize listeners collapse to one (#1423);
+terminal mouse tracking now has a CLI opt-out for users on
+mouse-hostile terminals (#1345).
+
+**Settings / config.** `config.json` with a UTF-8 BOM is tolerated
+instead of crashing the loader (#1431); preset-trace diagnostic
+retired (#1431). The dashboard can now clear `baseUrl` to fall back
+to the bundled default (#1425). `string[]` config fields are
+sanitized at the `readConfig` boundary so a malformed entry can't
+propagate into the running session (#1396).
+
+**Other:**
+- `fix(test)` switch vitest to forks pool to stop heap OOM on
+  many-core hosts (#1408)
+- `chore(shell)` trim `run_command` param description (saves 119
+  tokens of cached prefix) (#1403)
+- `chore(scripts)` measure per-tool token cost end-to-end (#1402)
+- `test(tools)` close dispatch-level E2E gaps for shell jobs, web,
+  and scaffold (#1400)
+- `test(shell-tools)` raise `run_background` dispatch test timeout
+  to 15s (#1406)
+- `test(web)` cover Perplexity + Exa backends (#1366)
+- `docs(qq)` add desktop quick start and trim README surface (#1401)
+
 ## [0.47.2] — 2026-05-19
 
 **Hotfix — `npx reasonix@latest` install.** `0.47.1` shipped with
