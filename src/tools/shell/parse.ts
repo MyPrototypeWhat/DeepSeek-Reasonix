@@ -155,6 +155,72 @@ export function detectShellOperator(cmd: string): string | null {
   return check();
 }
 
+/** Expand a leading `~` / `~/` token to the home dir at exec (issue #2105). The allowlist already
+ *  canonicalizes `~` via `homedir()` for its checks, so this adds no bypass — it just makes a vetted
+ *  `~/…` path work instead of reaching the process literally. `~user` and a mid-token `~` are left as-is. */
+export function expandTilde(token: string): string {
+  if (token === "~") return homedir();
+  if (token.startsWith("~/") || token.startsWith("~\\")) {
+    return pathMod.join(homedir(), token.slice(2));
+  }
+  return token;
+}
+
+/** `$…`/backtick at index `i` that a real shell would expand. Returns null for a lone `$` (e.g. `$`, `$5`, `$?`). */
+function expansionAt(cmd: string, i: number): { kind: "env" | "cmdsub"; sample: string } | null {
+  const ch = cmd[i]!;
+  if (ch === "`") return { kind: "cmdsub", sample: "`…`" };
+  if (ch !== "$") return null;
+  const next = cmd[i + 1];
+  if (next === "(") return { kind: "cmdsub", sample: "$(…)" };
+  if (next === "{") {
+    const end = cmd.indexOf("}", i + 2);
+    return { kind: "env", sample: end > i ? cmd.slice(i, end + 1) : "${…}" };
+  }
+  if (next !== undefined && /[A-Za-z_]/.test(next)) {
+    let j = i + 1;
+    while (j < cmd.length && /[A-Za-z0-9_]/.test(cmd[j]!)) j++;
+    return { kind: "env", sample: cmd.slice(i, j) };
+  }
+  return null;
+}
+
+/** Issue #2105 — env-var / command-substitution / backticks never expand without a shell, so a
+ *  command like `cat $DIR/x` reaches the process verbatim and "silently produces wrong results".
+ *  Flag those so the caller can error; globs (`*`) are left for the program to match. Quote-aware. */
+export function detectUnsupportedExpansion(
+  cmd: string,
+): { kind: "env" | "cmdsub"; sample: string } | null {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (isDqEscape(ch, cmd[i + 1])) {
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+      const hit = expansionAt(cmd, i);
+      if (hit) return hit;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    const hit = expansionAt(cmd, i);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 /** Per-prefix demotion: an otherwise-allowlisted match falls back to the confirm gate when one of these tokens appears in the tail. Issue #257: `git branch -D` skipped review. Each token also matches its `--flag=value` form. */
 const RISKY_ARGS: Readonly<Record<string, ReadonlyArray<string>>> = {
   // Branch / remote mutation
