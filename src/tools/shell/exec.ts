@@ -2,7 +2,7 @@ import { type ChildProcess, type SpawnOptions, spawn, spawnSync } from "node:chi
 import { existsSync, statSync } from "node:fs";
 import * as pathMod from "node:path";
 import { parseCommandChain, runChain } from "../shell-chain.js";
-import { tokenizeCommand } from "./parse.js";
+import { expandTilde, tokenizeCommand } from "./parse.js";
 
 export const DEFAULT_TIMEOUT_SEC = 60;
 export const DEFAULT_MAX_OUTPUT_CHARS = 32_000;
@@ -306,13 +306,16 @@ function defaultIsFile(full: string): boolean {
   }
 }
 
-/** Windows workarounds: PATHEXT lookup + CVE-2024-27980 prohibition on direct `.cmd`/`.bat` spawn. */
+/** Final argv → spawn normalization: leading-`~` expansion (all platforms, issue #2105) +
+ *  Windows PATHEXT lookup + CVE-2024-27980 prohibition on direct `.cmd`/`.bat` spawn. The single
+ *  chokepoint shared by run_command (single + chains) and run_background, so `~` is expanded once. */
 export function prepareSpawn(
   argv: readonly string[],
   opts: ResolveExecutableOptions = {},
 ): { bin: string; args: string[]; spawnOverrides: SpawnOptions } {
-  const head = argv[0] ?? "";
-  const tail = argv.slice(1);
+  const expanded = argv.map(expandTilde);
+  const head = expanded[0] ?? "";
+  const tail = expanded.slice(1);
   const platform = opts.platform ?? process.platform;
   const resolved = resolveExecutable(head, opts);
 

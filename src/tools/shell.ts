@@ -11,11 +11,13 @@ import {
   type RunCommandResult,
   runCommand,
 } from "./shell/exec.js";
-import { isCommandAllowed } from "./shell/parse.js";
+import { detectUnsupportedExpansion, isCommandAllowed } from "./shell/parse.js";
 
 export {
   BUILTIN_ALLOWLIST,
   detectShellOperator,
+  detectUnsupportedExpansion,
+  expandTilde,
   hasSensitivePathArgs,
   isAllowed,
   isCommandAllowed,
@@ -48,6 +50,21 @@ export interface ShellToolsOptions {
   /** Fired after `run_background` / `stop_job` mutate the registry — used by the desktop popover for near-real-time updates without polling. */
   onJobsChanged?: () => void;
   sensitivePaths?: { prefixes?: readonly string[]; patterns?: readonly string[] };
+}
+
+/** Issue #2105 — message for a command that relies on shell expansion this tool can't do.
+ *  Turns a silent literal-passthrough into an actionable error telling the model what to substitute. */
+export function unsupportedExpansionError(
+  toolName: string,
+  d: { kind: "env" | "cmdsub" | "glob"; sample: string },
+): string {
+  const what =
+    d.kind === "cmdsub"
+      ? `\`${d.sample}\` is shell command substitution`
+      : d.kind === "glob"
+        ? "an unquoted `*` glob"
+        : `\`${d.sample}\` is a shell variable`;
+  return `${toolName}: ${what}, but this tool runs WITHOUT a shell — it is not expanded and would reach the program literally (a silent mismatch, not an error). Substitute a concrete value: an absolute path instead of $VAR, the explicit filename(s) instead of *, or run the inner command yourself instead of $(…)/backticks. Quote the character (e.g. '*') to pass it literally. Note: a leading ~ IS expanded to the home directory.`;
 }
 
 /** Error thrown by `run_command` when the command isn't allowlisted. */
@@ -87,7 +104,7 @@ export function registerShellTools(registry: ToolRegistry, opts: ShellToolsOptio
   registry.register({
     name: "run_command",
     description:
-      'Run a shell command in the project root; returns combined stdout+stderr. Allowlisted read-only / test / lint / typecheck commands run immediately; mutating / network / install commands gate on user confirmation.\n\nDO NOT use run_command for file operations — use write_file, edit_file, multi_edit, copy_file, move_file, or delete_file instead. Shell utilities (echo, cp, sed, cat, tee, perl, python -c, etc.) bypass validation, lack rollback, and will trigger user confirmation gates that waste turns.\n\nNo real shell — argv parsed natively for cross-platform parity:\n• Supported: chains `|`/`||`/`&&`/`;` (each segment allowlist-checked) and file redirects `>`/`>>`/`<`/`2>`/`2>>`/`2>&1`/`&>`.\n• Rejected: background `&`, heredoc `<<`, `$(…)`, subshells, `$VAR` expansion, glob expansion. Quote operator chars as literals (`grep "a|b" file`).\n• `cd` is rejected in chains. By default, run generated scripts from the directory where the script was written; do not assume an input/data directory is the cwd. Pass input/data paths as arguments unless the command truly depends on that cwd. For package tools, use `npm --prefix <dir>`, `git -C <dir>`, `cargo -C <dir>`.\n• Filter at source — `grep -c` / `wc -l` / narrower paths over unbounded dumps.',
+      "Run a shell command in the project root; returns combined stdout+stderr. Allowlisted read-only / test / lint / typecheck commands run immediately; mutating / network / install commands gate on user confirmation.\n\nDO NOT use run_command for file operations — use write_file, edit_file, multi_edit, copy_file, move_file, or delete_file instead. Shell utilities (echo, cp, sed, cat, tee, perl, python -c, etc.) bypass validation, lack rollback, and will trigger user confirmation gates that waste turns.\n\nNo real shell — argv parsed natively for cross-platform parity:\n• Supported: chains `|`/`||`/`&&`/`;` (each segment allowlist-checked) and file redirects `>`/`>>`/`<`/`2>`/`2>>`/`2>&1`/`&>`. A leading `~` IS expanded to the home directory.\n• No expansion: `$VAR`/`${VAR}`/`$(…)`/backticks and a bare `*` glob are rejected with an error (not run literally) — pass a concrete value/filename, or single-quote the char to use it literally. Background `&`, heredoc `<<`, subshells are also unsupported.\n• `cd` is rejected in chains. By default, run generated scripts from the directory where the script was written; do not assume an input/data directory is the cwd. Pass input/data paths as arguments unless the command truly depends on that cwd. For package tools, use `npm --prefix <dir>`, `git -C <dir>`, `cargo -C <dir>`.\n• Filter at source — `grep -c` / `wc -l` / narrower paths over unbounded dumps.",
     // Plan-mode gate: allow allowlisted commands through (git status,
     // cargo check, ls, grep …) so the model can actually investigate
     // during planning. Anything that would otherwise trigger a
@@ -116,6 +133,8 @@ export function registerShellTools(registry: ToolRegistry, opts: ShellToolsOptio
     fn: async (args: { command: string; timeoutSec?: number }, ctx) => {
       const cmd = args.command.trim();
       if (!cmd) throw new Error("run_command: empty command");
+      const expansion = detectUnsupportedExpansion(cmd);
+      if (expansion) throw new Error(unsupportedExpansionError("run_command", expansion));
       const effectiveTimeout = Math.max(1, Math.min(600, args.timeoutSec ?? timeoutSec));
       if (
         !isAllowAll() &&
@@ -174,6 +193,8 @@ export function registerShellTools(registry: ToolRegistry, opts: ShellToolsOptio
     fn: async (args: { command: string; cwd?: string; waitSec?: number }, ctx) => {
       const cmd = args.command.trim();
       if (!cmd) throw new Error("run_background: empty command");
+      const expansion = detectUnsupportedExpansion(cmd);
+      if (expansion) throw new Error(unsupportedExpansionError("run_background", expansion));
       const cwd = resolveCwdInsideRoot(rootDir, args.cwd);
       if (
         !isAllowAll() &&
